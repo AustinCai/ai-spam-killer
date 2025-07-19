@@ -1,6 +1,47 @@
+# Google APIs
 google-api-python-client==2.114.0
+google-auth==2.40.3
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.0
-openai>=1.66.3
+google-api-core==2.25.1
+googleapis-common-protos==1.70.0
+
+# OpenAI API with compatible version
+openai==1.55.3
+
+# HTTP client with compatible version
+httpx==0.27.2
+
+# Environment variables
 python-dotenv==1.0.0
-httpx>=0.24.0
+
+# Supporting dependencies
+requests==2.32.3
+urllib3==2.5.0
+certifi>=2025.1.31
+idna>=3.10
+anyio>=4.9.0
+sniffio>=1.3.1
+h11>=0.14.0
+httpcore>=1.0.7
+
+# OAuth and auth dependencies
+requests-oauthlib==2.0.0
+oauthlib==3.3.1
+cachetools==5.5.2
+pyasn1==0.6.1
+pyasn1-modules==0.4.2
+rsa==4.9.1
+
+# Google API supporting libraries
+uritemplate==4.2.0
+httplib2==0.22.0
+proto-plus==1.26.1
+protobuf>=6.31.1
+pyparsing>=3.2.3
+
+# Data handling
+tqdm>=4.67.1
+typing-extensions>=4.13.0
+pydantic>=2.11.1
+annotated-types>=0.7.0

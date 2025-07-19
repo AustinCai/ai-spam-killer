@@ -165,7 +165,7 @@ class GmailSpamKiller:
         
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=100,
                 temperature=0.1
