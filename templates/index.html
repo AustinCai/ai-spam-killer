@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Spam Killer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+<body class="bg-gray-100">
+    <div x-data="spamKiller()" x-init="checkStatus()" class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-blue-600 text-white shadow-lg">
+            <div class="container mx-auto px-4 py-6">
+                <div class="flex items-center gap-3">
+                    <h1 class="text-3xl font-bold">🔰 Gmail Spam Killer</h1>
+                </div>
+                <p class="text-blue-100 mt-2">AI-powered spam detection and management</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="container mx-auto px-4 py-8">
+            <!-- Authentication Section -->
+            <div x-show="!authenticated" class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">🔐 Authentication Required</h2>
+                <p class="text-gray-600 mb-4">Please authenticate with Gmail to start scanning for spam.</p>
+                <button 
+                    @click="authenticate()"
+                    :disabled="authenticating"
+                    class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg transition-colors"
+                >
+                    <span x-show="!authenticating">Authenticate with Gmail</span>
+                    <span x-show="authenticating">Authenticating...</span>
+                </button>
+            </div>
+
+            <!-- Control Panel -->
+            <div x-show="authenticated" class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">⚙️ Scan Controls</h2>
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <div class="flex-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Max Emails</label>
+                        <input 
+                            x-model="maxEmails" 
+                            type="number" 
+                            min="1" 
+                            max="100" 
+                            class="border border-gray-300 rounded-md px-3 py-2 w-full sm:w-32 h-[42px]"
+                        >
+                    </div>
+                    <div class="flex sm:items-end">
+                        <button 
+                            @click="startScan()"
+                            :disabled="scanning"
+                            class="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-6 py-2 h-[42px] rounded-lg transition-colors"
+                        >
+                            <span x-show="!scanning">🔍 Start Scan</span>
+                            <span x-show="scanning">⏳ Scanning...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div x-show="scanning || scanStatus.current_email" class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <h3 class="text-lg font-semibold mb-4">📊 Scan Progress</h3>
+                <div class="mb-4">
+                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                        <span x-text="scanStatus.current_email || 'Preparing scan...'"></span>
+                        <span x-text="`${Math.floor((scanStatus.fakeProgress || 0) / 100 * (scanStatus.total || maxEmails))}/${scanStatus.total || maxEmails}`"></span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                        <div 
+                            class="bg-blue-600 h-2 rounded-full transition-all duration-200 ease-out"
+                            :style="`width: ${scanStatus.fakeProgress || 0}%`"
+                        ></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div x-show="results.length > 0" class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-lg font-semibold mb-4">📧 Email Analysis Results</h3>
+                
+                <!-- Summary Stats -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-blue-50 p-4 rounded-lg">
+                        <div class="text-2xl font-bold text-blue-600" x-text="results.length"></div>
+                        <div class="text-sm text-gray-600">Total Emails</div>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg">
+                        <div class="text-2xl font-bold text-red-600" x-text="spamCount"></div>
+                        <div class="text-sm text-gray-600">Spam Detected</div>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <div class="text-2xl font-bold text-green-600" x-text="cleanCount"></div>
+                        <div class="text-sm text-gray-600">Clean Emails</div>
+                    </div>
+                </div>
+
+                <!-- Email List -->
+                <div class="space-y-4">
+                    <template x-for="email in results" :key="email.email_id">
+                        <div class="border border-gray-200 bg-white rounded-lg p-4 transition-all duration-300" 
+                             :class="email.archived ? 'opacity-60' : ''"
+                        >
+                            <!-- Email Header -->
+                            <div class="flex items-start justify-between mb-3">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <span x-text="email.archived ? '🗄️' : (email.is_spam ? '🚨' : '✅')"></span>
+                                        <span class="font-medium" x-text="email.subject"></span>
+                                        <span x-show="email.archived" class="text-xs bg-gray-500 text-white px-2 py-1 rounded-full ml-2">ARCHIVED</span>
+                                    </div>
+                                    <div class="text-sm text-gray-600" x-text="email.sender"></div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span 
+                                        class="px-2 py-1 rounded-full text-xs font-medium"
+                                        :class="email.archived ? 'bg-gray-200 text-gray-600' : (email.is_spam ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800')"
+                                        x-text="email.archived ? 'PROCESSED' : (email.is_spam ? 'SPAM' : 'CLEAN')"
+                                    ></span>
+                                </div>
+                            </div>
+
+                            <!-- Email Body Preview -->
+                            <div class="text-sm text-gray-700 mb-3" x-text="email.body_preview"></div>
+
+                            <!-- AI Reason -->
+                            <div class="text-sm text-gray-600 mb-3">
+                                <strong>AI Analysis:</strong> <span x-text="email.reason"></span>
+                            </div>
+
+                            <!-- Spam Actions -->
+                            <div x-show="email.is_spam && !email.archived" class="border-t pt-3">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div x-show="email.unsubscribe_links.length > 0" class="text-sm text-gray-600 mb-2">
+                                            <span x-text="`Found ${email.unsubscribe_links.length} unsubscribe link(s)`"></span>
+                                        </div>
+                                        <label class="flex items-center gap-2 text-sm">
+                                            <input type="checkbox" :id="`unsubscribe_${email.email_id}`" class="rounded">
+                                            <span>Also attempt to unsubscribe</span>
+                                        </label>
+                                    </div>
+                                    <button 
+                                        @click="archiveEmail(email)"
+                                        :disabled="processingEmails.includes(email.email_id)"
+                                        class="hover:bg-gray-100 disabled:bg-gray-400 px-4 py-2 rounded-lg transition-colors text-sm"
+                                    >
+                                        <span x-show="!processingEmails.includes(email.email_id)">✖ Archive & Label</span>
+                                        <span x-show="processingEmails.includes(email.email_id)">Processing...</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Archived Status -->
+                            <div x-show="email.archived" class="border-t pt-3">
+                                <div class="flex items-center justify-between">
+                                    <div class="text-sm text-gray-600">
+                                        <span class="font-medium">Status:</span> 
+                                        <span x-text="email.archive_message || 'Email archived and labeled as AI Archived'"></span>
+                                    </div>
+                                    <div class="text-xs text-gray-500">
+                                        ✅ Processed
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Status Messages -->
+            <div x-show="statusMessage" class="fixed bottom-4 right-4 p-4 rounded-lg shadow-lg max-w-sm" 
+                 :class="statusType === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'">
+                <p x-text="statusMessage"></p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function spamKiller() {
+            return {
+                authenticated: false,
+                authenticating: false,
+                scanning: false,
+                maxEmails: 20,
+                results: [],
+                scanStatus: {
+                    scanning: false,
+                    progress: 0,
+                    total: 0,
+                    current_email: ''
+                },
+                processingEmails: [],
+                statusMessage: '',
+                statusType: 'info',
+
+                get spamCount() {
+                    return this.results.filter(email => email.is_spam).length;
+                },
+
+                get cleanCount() {
+                    return this.results.filter(email => !email.is_spam).length;
+                },
+
+                async checkStatus() {
+                    try {
+                        const response = await fetch('/api/status');
+                        const data = await response.json();
+                        this.authenticated = data.authenticated;
+                    } catch (error) {
+                        console.error('Error checking status:', error);
+                    }
+                },
+
+                async authenticate() {
+                    this.authenticating = true;
+                    try {
+                        const response = await fetch('/api/authenticate', {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            this.authenticated = true;
+                            this.showStatus('Successfully authenticated with Gmail!', 'success');
+                        } else {
+                            this.showStatus(data.message, 'error');
+                        }
+                    } catch (error) {
+                        this.showStatus('Authentication failed: ' + error.message, 'error');
+                    } finally {
+                        this.authenticating = false;
+                    }
+                },
+
+                async startScan() {
+                    this.scanning = true;
+                    this.results = [];
+                    // Initialize progress values
+                    this.scanStatus = {
+                        scanning: true,
+                        progress: 0,
+                        total: parseInt(this.maxEmails),
+                        current_email: 'Starting scan...',
+                        results: [],
+                        fakeProgress: 0
+                    };
+                    
+                    try {
+                        const response = await fetch('/api/scan', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                max_emails: parseInt(this.maxEmails)
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || 'Failed to start scan');
+                        }
+                        
+                        // Start fake progress animation to 70% over 10 seconds
+                        this.startFakeProgress();
+                        
+                        // Start polling for completion
+                        this.pollScanStatus();
+                    } catch (error) {
+                        this.showStatus('Failed to start scan: ' + (error.message || error), 'error');
+                        this.scanning = false;
+                        this.scanStatus.scanning = false;
+                    }
+                },
+
+                startFakeProgress() {
+                    const duration = (5 * this.maxEmails / 20) * 1000; // (5 * MAX_EMAILS / 20) seconds in milliseconds
+                    const targetProgress = 70; // 70%
+                    const startTime = Date.now();
+                    let lastProgress = 0;
+                    
+                    const updateProgress = () => {
+                        const elapsed = Date.now() - startTime;
+                        let baseProgress = Math.min(targetProgress, (elapsed / duration) * targetProgress);
+                        
+                        // Add jitter as we approach 70% (but no backwards movement)
+                        if (baseProgress > 40) {
+                            const jitterIntensity = Math.min(1, (baseProgress - 40) / 30); // Increases as we approach 70%
+                            const jitter = Math.random() * 2 * jitterIntensity; // Random jitter between 0 to +2
+                            baseProgress += jitter;
+                            
+                            // Ensure we don't go backwards and don't exceed target
+                            baseProgress = Math.max(lastProgress, Math.min(targetProgress, baseProgress));
+                        }
+                        
+                        this.scanStatus.fakeProgress = baseProgress;
+                        this.scanStatus.current_email = `Analyzing emails... ${Math.floor(baseProgress)}%`;
+                        lastProgress = baseProgress;
+                        
+                        if (baseProgress < targetProgress && this.scanning) {
+                            requestAnimationFrame(updateProgress);
+                        } else if (baseProgress >= targetProgress && this.scanning) {
+                            // Reached 70%, show waiting message
+                            this.scanStatus.fakeProgress = targetProgress; // Ensure we end exactly at 70%
+                            this.scanStatus.current_email = 'Processing results...';
+                        }
+                    };
+                    
+                    updateProgress();
+                },
+
+                async pollScanStatus() {
+                    const poll = async () => {
+                        try {
+                            const response = await fetch('/api/scan/status');
+                            const status = await response.json();
+
+                            if (!status.scanning) {
+                                // Scan completed - animate to 100% and show results
+                                this.completeScan(status);
+                                return;
+                            }
+
+                            // Only poll for completion, don't update progress
+                            setTimeout(poll, 1000);
+                        } catch (error) {
+                            console.error('Error polling status:', error);
+                            this.scanning = false;
+                            this.scanStatus.scanning = false;
+                        }
+                    };
+
+                    poll();
+                },
+
+                completeScan(status) {
+                    // Animate progress bar to 100%
+                    this.scanStatus.fakeProgress = 100;
+                    this.scanStatus.current_email = 'Scan completed!';
+                    
+                    // Show results after a brief moment for the 100% animation to be visible
+                    setTimeout(() => {
+                        if (status.results && status.results.length > 0) {
+                            this.results = status.results;
+                            this.showStatus('Scan completed successfully!', 'success');
+                        }
+                        // Only set scanning to false after results are shown
+                        this.scanning = false;
+                    }, 300);
+                },
+
+                async archiveEmail(email) {
+                    this.processingEmails.push(email.email_id);
+                    
+                    const unsubscribeCheckbox = document.getElementById(`unsubscribe_${email.email_id}`);
+                    const shouldUnsubscribe = unsubscribeCheckbox?.checked || false;
+
+                    try {
+                        const response = await fetch('/api/archive', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                email_id: email.email_id,
+                                unsubscribe: shouldUnsubscribe,
+                                unsubscribe_links: email.unsubscribe_links
+                            })
+                        });
+
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            // Mark email as archived instead of removing it
+                            const emailIndex = this.results.findIndex(e => e.email_id === email.email_id);
+                            if (emailIndex !== -1) {
+                                this.results[emailIndex].archived = true;
+                                this.results[emailIndex].archive_message = result.message;
+                            }
+                            this.showStatus(result.message, 'success');
+                        } else {
+                            this.showStatus(result.message, 'error');
+                        }
+                    } catch (error) {
+                        this.showStatus('Failed to archive email: ' + error.message, 'error');
+                    } finally {
+                        this.processingEmails = this.processingEmails.filter(id => id !== email.email_id);
+                    }
+                },
+
+                showStatus(message, type) {
+                    this.statusMessage = message;
+                    this.statusType = type;
+                    setTimeout(() => {
+                        this.statusMessage = '';
+                    }, 5000);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
