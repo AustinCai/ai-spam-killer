@@ -15,7 +15,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+import requests
 
 # Suppress XML parsed as HTML warning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -41,7 +43,7 @@ USER_DESCRIPTION = "A 28 year old designer who lives in SF and NYC. His interest
 MAX_EMAILS = 100
 START_RANGE_DAYS = 14
 END_RANGE_DAYS = 0
-MAX_WORKERS = 40  # Number of parallel threads for OpenAI API calls
+MAX_WORKERS = 20  # Number of parallel threads for OpenAI API calls
 
 # Date range for email scanning (modify these to change the time window)
 START_DATE = (datetime.now() - timedelta(days=START_RANGE_DAYS)).strftime('%Y/%m/%d')  # futher back
@@ -59,6 +61,10 @@ class GmailSpamKiller:
         self.ai_archived_label_id = None
         self.spam_examples = []
         self.spam_detection_prompt_template = None
+        self.unsubscribe_session = requests.Session()
+        self.unsubscribe_session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
         
     def authenticate_gmail(self):
         """Authenticate with Gmail API using OAuth2."""
@@ -92,7 +98,7 @@ class GmailSpamKiller:
         self._collect_spam_examples()
         return True
         
-    def get_recent_emails(self, max_results=50):
+    def get_recent_emails(self, max_results=MAX_EMAILS):
         """Fetch emails from inbox within the specified date range."""
         try:
             # Build query with date range
@@ -268,6 +274,170 @@ class GmailSpamKiller:
             print(f"Error analyzing email: {e}")
             return False, "Error occurred"
     
+    def find_unsubscribe_links(self, email_body, raw_html_body=None):
+        """Find unsubscribe links in email body."""
+        unsubscribe_urls = set()
+        
+        # Common unsubscribe patterns
+        unsubscribe_patterns = [
+            r'https?://[^\s]+unsubscribe[^\s]*',
+            r'https?://[^\s]+opt[_-]?out[^\s]*',
+            r'https?://[^\s]+remove[^\s]*',
+            r'https?://[^\s]+stop[^\s]*'
+        ]
+        
+        # Search in plain text body
+        for pattern in unsubscribe_patterns:
+            matches = re.findall(pattern, email_body, re.IGNORECASE)
+            for match in matches:
+                # Clean up common trailing characters
+                url = re.sub(r'[>)\].,;"\'\n]*$', '', match)
+                unsubscribe_urls.add(url)
+        
+        # If we have raw HTML, also search there
+        if raw_html_body:
+            try:
+                soup = BeautifulSoup(raw_html_body, 'html.parser')
+                
+                # Look for links with unsubscribe-related text
+                for link in soup.find_all('a', href=True):
+                    href = link.get('href')
+                    text = link.get_text().lower()
+                    
+                    if any(word in text for word in ['unsubscribe', 'opt out', 'remove', 'stop']):
+                        if href.startswith('http'):
+                            unsubscribe_urls.add(href)
+                    
+                    # Also check href for unsubscribe patterns
+                    if any(word in href.lower() for word in ['unsubscribe', 'opt-out', 'optout', 'remove']):
+                        if href.startswith('http'):
+                            unsubscribe_urls.add(href)
+            except Exception as e:
+                print(f"Error parsing HTML for unsubscribe links: {e}")
+        
+        return list(unsubscribe_urls)
+    
+    def attempt_unsubscribe(self, unsubscribe_urls):
+        """Attempt to unsubscribe using the provided URLs."""
+        success_count = 0
+        
+        for url in unsubscribe_urls[:3]:  # Limit to first 3 URLs to avoid spam
+            try:
+                print(f"   🔗 Attempting unsubscribe: {url[:80]}...")
+                
+                # First try a GET request
+                response = self.unsubscribe_session.get(url, timeout=10, allow_redirects=True)
+                
+                if response.status_code == 200:
+                    # Look for forms or additional confirmation
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Look for unsubscribe forms
+                    forms = soup.find_all('form')
+                    form_submitted = False
+                    
+                    for form in forms:
+                        # Check if this looks like an unsubscribe form
+                        form_text = form.get_text().lower()
+                        if any(word in form_text for word in ['unsubscribe', 'remove', 'opt out', 'confirm']):
+                            try:
+                                action = form.get('action', '')
+                                method = form.get('method', 'get').lower()
+                                
+                                if action:
+                                    action_url = urljoin(url, action)
+                                else:
+                                    action_url = url
+                                
+                                # Collect form data
+                                form_data = {}
+                                for input_tag in form.find_all(['input', 'select']):
+                                    name = input_tag.get('name')
+                                    value = input_tag.get('value', '')
+                                    input_type = input_tag.get('type', '').lower()
+                                    
+                                    if name and input_type not in ['submit', 'button', 'reset']:
+                                        form_data[name] = value
+                                
+                                # Submit the form
+                                if method == 'post':
+                                    form_response = self.unsubscribe_session.post(
+                                        action_url, data=form_data, timeout=10
+                                    )
+                                else:
+                                    form_response = self.unsubscribe_session.get(
+                                        action_url, params=form_data, timeout=10
+                                    )
+                                
+                                if form_response.status_code in [200, 302]:
+                                    print(f"   ✅ Form submitted successfully")
+                                    form_submitted = True
+                                    success_count += 1
+                                    break
+                                    
+                            except Exception as e:
+                                print(f"   ⚠️  Form submission failed: {e}")
+                    
+                    if not form_submitted:
+                        # If no form found, the GET request itself might be sufficient
+                        print(f"   ✅ Unsubscribe request sent (status: {response.status_code})")
+                        success_count += 1
+                        
+                else:
+                    print(f"   ❌ Failed to access unsubscribe URL (status: {response.status_code})")
+                    
+            except requests.RequestException as e:
+                print(f"   ❌ Network error accessing unsubscribe URL: {e}")
+            except Exception as e:
+                print(f"   ❌ Error processing unsubscribe URL: {e}")
+        
+        return success_count
+    
+    def get_raw_email_html(self, email_id):
+        """Get the raw HTML content of an email for unsubscribe link extraction."""
+        try:
+            msg = self.service.users().messages().get(
+                userId='me',
+                id=email_id,
+                format='full'
+            ).execute()
+            
+            def extract_html_from_parts(parts):
+                """Recursively extract HTML from email parts."""
+                html_content = ""
+                
+                for part in parts:
+                    mime_type = part.get('mimeType', '')
+                    
+                    if 'parts' in part:
+                        html_content += extract_html_from_parts(part['parts'])
+                    elif mime_type == 'text/html' and 'data' in part.get('body', {}):
+                        try:
+                            decoded = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
+                            html_content += decoded
+                        except Exception:
+                            pass
+                
+                return html_content
+            
+            html_body = ""
+            payload = msg['payload']
+            
+            if 'parts' in payload:
+                html_body = extract_html_from_parts(payload['parts'])
+            else:
+                if payload.get('mimeType') == 'text/html' and 'data' in payload.get('body', {}):
+                    try:
+                        html_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+            
+            return html_body
+            
+        except Exception as e:
+            print(f"Error getting raw email HTML: {e}")
+            return None
+    
     def _analyze_email_batch(self, email_with_index):
         """Analyze a single email and return result with original index."""
         index, email = email_with_index
@@ -365,7 +535,7 @@ class GmailSpamKiller:
         spam_examples_text = ""
         if self.spam_examples:
             spam_examples_text = "\n\nHere are examples of emails that were previously identified as spam:\n"
-            for i, example in enumerate(self.spam_examples[:5], 1):  # Use up to 5 examples
+            for i, example in enumerate(self.spam_examples[:10], 1):  # Use up to 5 examples
                 spam_examples_text += f"\nSpam Example {i}:\n"
                 spam_examples_text += f"Subject: {example['subject']}\n"
                 spam_examples_text += f"From: {example['sender']}\n"
@@ -491,8 +661,30 @@ Based on the above criteria and spam examples, respond with only "SPAM" or "NOT_
                 
                 if dry_run:
                     print("   [DRY RUN] Would archive and label as 'AI Archived'")
+                    # Still show unsubscribe links in dry run mode
+                    raw_html = self.get_raw_email_html(email['id'])
+                    unsubscribe_links = self.find_unsubscribe_links(email['body'], raw_html)
+                    if unsubscribe_links:
+                        print(f"   [DRY RUN] Found {len(unsubscribe_links)} unsubscribe link(s):")
+                        for link in unsubscribe_links[:2]:  # Show first 2 links
+                            print(f"     - {link[:80]}...")
                 else:
                     if input("   Archive this email? (y/N): ").lower() == 'y':
+                        # First try to unsubscribe
+                        raw_html = self.get_raw_email_html(email['id'])
+                        unsubscribe_links = self.find_unsubscribe_links(email['body'], raw_html)
+                        
+                        if unsubscribe_links:
+                            print(f"   🔍 Found {len(unsubscribe_links)} unsubscribe link(s)")
+                            success_count = self.attempt_unsubscribe(unsubscribe_links)
+                            if success_count > 0:
+                                print(f"   ✅ Successfully processed {success_count} unsubscribe request(s)")
+                            else:
+                                print("   ⚠️  No unsubscribe requests were successful")
+                        else:
+                            print("   ℹ️  No unsubscribe links found")
+                        
+                        # Then archive the email
                         if self.archive_email(email['id']):
                             print("   ✅ Email archived and labeled as 'AI Archived'")
                         else:
