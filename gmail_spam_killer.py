@@ -356,8 +356,8 @@ class GmailSpamKiller:
         self._build_spam_detection_prompt()
 
         # Remove debug output of prompt
-        # print("The prompt is ============================")
-        # print(self.spam_detection_prompt_template)
+        print("The prompt is ============================")
+        print(self.spam_detection_prompt_template)
     
     def _build_spam_detection_prompt(self):
         """Build the spam detection prompt template once with collected examples."""
@@ -374,12 +374,11 @@ class GmailSpamKiller:
         self.spam_detection_prompt_template = f"""
 You are analyzing the inbox of {USER_DESCRIPTION}.
 
-Analyze this email and determine if it's spam. Consider factors like:
-- Unsolicited promotional content
-- Domestic violence related
-- Foreign languages
-- Religious content
-- Similarity to known spam patterns: {spam_examples_text}
+You should classify emails as either SPAM or NOT_SPAM, dependent on whether the user wants them to appear in their main inbox. 
+
+Typically, SMAP emails include unsolicited promotional or informational content, but you should use your judgment on what a user might want to see. Keep in mind your knowedlge of the user preferences. Some examples of emails the user has classified as SPAM in the past are:
+
+{spam_examples_text}
 
 ===================================================================
 Email to Analyze:
