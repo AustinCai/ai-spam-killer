@@ -99,6 +99,41 @@
                     </div>
                 </div>
 
+                <!-- Bulk Actions -->
+                <div x-show="results.length > 0 && spamCount > 0" class="mb-4 p-4 bg-gray-50 rounded-lg border">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <label class="flex items-center gap-2 text-sm font-medium">
+                                <input 
+                                    type="checkbox" 
+                                    @change="toggleSelectAll($event.target.checked)"
+                                    :checked="selectedEmails.length === spamEmails.length && spamEmails.length > 0"
+                                    :indeterminate="selectedEmails.length > 0 && selectedEmails.length < spamEmails.length"
+                                    class="rounded"
+                                >
+                                Select All Spam
+                            </label>
+                            <span x-show="selectedEmails.length > 0" class="text-sm text-gray-600">
+                                <span x-text="selectedEmails.length"></span> emails selected
+                            </span>
+                        </div>
+                        <div x-show="selectedEmails.length > 0" class="flex items-center gap-2">
+                            <label class="flex items-center gap-2 text-sm">
+                                <input type="checkbox" x-model="bulkUnsubscribe" class="rounded">
+                                Also attempt to unsubscribe
+                            </label>
+                            <button 
+                                @click="archiveSelectedEmails()"
+                                :disabled="processingBulk"
+                                class="hover:bg-gray-100 disabled:bg-gray-400 px-4 py-2 rounded-lg transition-colors text-sm bg-gray-600 text-white hover:bg-gray-700"
+                            >
+                                <span x-show="!processingBulk">🗄️ Archive Selected</span>
+                                <span x-show="processingBulk">Processing...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Email List -->
                 <div class="space-y-4">
                     <template x-for="email in results" :key="email.email_id">
@@ -107,13 +142,26 @@
                         >
                             <!-- Email Header -->
                             <div class="flex items-start justify-between mb-3">
-                                <div class="flex-1">
-                                    <div class="flex items-center gap-2 mb-1">
-                                        <span x-text="email.archived ? '🗄️' : (email.is_spam ? '🚨' : '✅')"></span>
-                                        <span class="font-medium" x-text="email.subject"></span>
-                                        <span x-show="email.archived" class="text-xs bg-gray-500 text-white px-2 py-1 rounded-full ml-2">ARCHIVED</span>
+                                <div class="flex items-start gap-3 flex-1">
+                                    <!-- Checkbox for spam emails that aren't archived -->
+                                    <div x-show="email.is_spam && !email.archived" class="mt-1">
+                                        <input 
+                                            type="checkbox" 
+                                            :value="email.email_id"
+                                            @change="toggleEmailSelection(email.email_id, $event.target.checked)"
+                                            :checked="selectedEmails.includes(email.email_id)"
+                                            class="rounded"
+                                        >
                                     </div>
-                                    <div class="text-sm text-gray-600" x-text="email.sender"></div>
+                                    <!-- Email content -->
+                                    <div class="flex-1">
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <span x-text="email.archived ? '🗄️' : (email.is_spam ? '🚨' : '✅')"></span>
+                                            <span class="font-medium" x-text="email.subject"></span>
+                                            <span x-show="email.archived" class="text-xs bg-gray-500 text-white px-2 py-1 rounded-full ml-2">ARCHIVED</span>
+                                        </div>
+                                        <div class="text-sm text-gray-600" x-text="email.sender"></div>
+                                    </div>
                                 </div>
                                 <div class="flex items-center gap-2">
                                     <span 
@@ -192,9 +240,13 @@
                     scanning: false,
                     progress: 0,
                     total: 0,
-                    current_email: ''
+                    current_email: '',
+                    fakeProgress: 0
                 },
                 processingEmails: [],
+                selectedEmails: [],
+                processingBulk: false,
+                bulkUnsubscribe: false,
                 statusMessage: '',
                 statusType: 'info',
 
@@ -204,6 +256,10 @@
 
                 get cleanCount() {
                     return this.results.filter(email => !email.is_spam).length;
+                },
+
+                get spamEmails() {
+                    return this.results.filter(email => email.is_spam && !email.archived);
                 },
 
                 async checkStatus() {
@@ -390,6 +446,85 @@
                         this.showStatus('Failed to archive email: ' + error.message, 'error');
                     } finally {
                         this.processingEmails = this.processingEmails.filter(id => id !== email.email_id);
+                    }
+                },
+
+                toggleEmailSelection(emailId, checked) {
+                    if (checked) {
+                        if (!this.selectedEmails.includes(emailId)) {
+                            this.selectedEmails.push(emailId);
+                        }
+                    } else {
+                        this.selectedEmails = this.selectedEmails.filter(id => id !== emailId);
+                    }
+                },
+
+                toggleSelectAll(checked) {
+                    if (checked) {
+                        this.selectedEmails = this.spamEmails.map(email => email.email_id);
+                    } else {
+                        this.selectedEmails = [];
+                    }
+                },
+
+                async archiveSelectedEmails() {
+                    if (this.selectedEmails.length === 0) return;
+                    
+                    this.processingBulk = true;
+                    let successCount = 0;
+                    let errorCount = 0;
+
+                    try {
+                        // Process each selected email
+                        for (const emailId of this.selectedEmails) {
+                            const email = this.results.find(e => e.email_id === emailId);
+                            if (!email) continue;
+
+                            try {
+                                const response = await fetch('/api/archive', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                        email_id: emailId,
+                                        unsubscribe: this.bulkUnsubscribe,
+                                        unsubscribe_links: email.unsubscribe_links || []
+                                    })
+                                });
+
+                                const result = await response.json();
+                                
+                                if (result.success) {
+                                    // Mark email as archived
+                                    const emailIndex = this.results.findIndex(e => e.email_id === emailId);
+                                    if (emailIndex !== -1) {
+                                        this.results[emailIndex].archived = true;
+                                        this.results[emailIndex].archive_message = result.message;
+                                    }
+                                    successCount++;
+                                } else {
+                                    errorCount++;
+                                }
+                            } catch (error) {
+                                errorCount++;
+                            }
+                        }
+
+                        // Clear selection
+                        this.selectedEmails = [];
+                        this.bulkUnsubscribe = false;
+
+                        // Show result
+                        if (successCount > 0 && errorCount === 0) {
+                            this.showStatus(`Successfully archived ${successCount} emails!`, 'success');
+                        } else if (successCount > 0 && errorCount > 0) {
+                            this.showStatus(`Archived ${successCount} emails, ${errorCount} failed.`, 'success');
+                        } else {
+                            this.showStatus(`Failed to archive ${errorCount} emails.`, 'error');
+                        }
+                    } finally {
+                        this.processingBulk = false;
                     }
                 },
 
